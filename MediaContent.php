@@ -14,18 +14,18 @@ class MediaContent
     private const ONE_UP = 1;
 
     private $mediaFiles = [];
-    private $newFileName = '';
 
     public function __construct(int $iBlockId)
     {
-        \Bitrix\Main\Loader::includeModule('av.rest');
-
+        if (!\Bitrix\Main\Loader::includeModule('av.rest')) {
+            printf("Unable to include module 'av.rest'.\n");
+            return;
+        }
         $arFilter = ['IBLOCK_ID' => $iBlockId, 'GLOBAL_ACTIVE' => 'Y'];
 
         $result = \CIBlockElement::GetList(['SORT' => 'ASC'], $arFilter);
 
-        while($element = $result->GetNext())
-        {
+        while($element = $result->GetNext()) {
             $this->mediaFiles[] = $element;
         }
     }
@@ -34,20 +34,42 @@ class MediaContent
     {
         $countRenamed = self::BEGIN_COUNT;
 
-        foreach($this->mediaFiles as $file) {
-            try {
-                $this->modifyFileName((int) $file['PREVIEW_PICTURE']);
-                $this->modifyFileName((int) $file['DETAIL_PICTURE']);
+        if (empty($this->mediaFiles)) {
+            printf("Failed! Media is empty.\n");
+            return;
+        }
 
-                $this->modifyDBTableFileName((int) $file['PREVIEW_PICTURE'], $this->newFileName);
-                $this->modifyDBTableFileName((int) $file['DETAIL_PICTURE'], $this->newFileName);
+        foreach ($this->mediaFiles as $file) {
+            $previewId = isset($file['PREVIEW_PICTURE']) ? (int) $file['PREVIEW_PICTURE'] : 0;
+            $detailId = isset($file['DETAIL_PICTURE']) ? (int) $file['DETAIL_PICTURE'] : 0;
+
+            if ($previewId === 0 && $detailId === 0) {
+                printf("Element with ID %s skipped - images not fount.\n", $file['ID']);
+                continue;
+            }
+
+            try {
+                if ($previewId > 0) {
+                    $this->modifyFileName($previewId);
+                }
+
+                if ($detailId > 0) {
+                    $this->modifyFileName($detailId);
+                }
 
                 $countRenamed += self::ONE_UP;
 
-                printf("File for element with id %s named as %s successfully renamed\n", $file['ID'], $file['NAME']);
+                printf(
+                    "File for element with ID %s named as \"%s\" successfully renamed\n",
+                            $file['ID'],
+                            $file['NAME']
+                );
             } catch (Exception $exception) {
-                printf("Unable to rename file with id %s \n", $file['ID']);
-
+                printf(
+                    "Unable to rename file(s) with ID %s: %s\n",
+                            $file['ID'],
+                            $exception->getMessage()
+                );
                 continue;
             }
         }
@@ -55,43 +77,37 @@ class MediaContent
         printf("Success, totally files renamed: %d \n", $countRenamed);
     }
 
-    private function modifyFileName(int $id = null): void
+    private function modifyFileName(int $id): void
     {
-        if (empty($id)) {
-            return;
-        }
-
         $realFilePath = $this->getRealFilePath($id);
         $realFileName = $this->getRealFileName($id);
 
-        $this->newFileName = $this->getMD5FileName($realFileName)
+        if (!$realFilePath || !$realFileName) {
+            throw new FileOrPathNotFoundException("Unable to get path or file name for ID $id");
+        }
+
+        $newFileName = $this->getMD5FileName($realFileName)
             . '.' . pathinfo($realFilePath
             . '/' . $realFileName, PATHINFO_EXTENSION);
 
         $oldFilePath = Application::getDocumentRoot() . $realFilePath . '/' . $realFileName;
-        $modifiedFilePath = Application::getDocumentRoot() . $realFilePath . '/' . $this->newFileName;
+        $modifiedFilePath = Application::getDocumentRoot() . $realFilePath . '/' . $newFileName;
 
         $file = new File($oldFilePath);
         $file->rename($modifiedFilePath);
+
+        $this->modifyDBTableFileName($id, $newFileName);
     }
 
-    private function getRealFilePath(int $id = null): string
+    private function getRealFilePath(int $id): string
     {
-        if (empty($id)) {
-            return '';
-        }
-
         $file = \CFile::GetFileArray($id);
 
         return '/upload/' . $file['SUBDIR'];
     }
 
-    private function getRealFileName(int $id = null): string
+    private function getRealFileName(int $id): string
     {
-        if (empty($id)) {
-            return '';
-        }
-
         $file = \CFile::GetFileArray($id);
 
         return $file['FILE_NAME'];
@@ -102,18 +118,13 @@ class MediaContent
         $connection = Application::getConnection();
 
         $connection->queryExecute(
-            "UPDATE b_file
-                SET FILE_NAME = '$fileName', ORIGINAL_NAME = '$fileName'
-                WHERE ID = $id "
+            "UPDATE b_file SET FILE_NAME = ?, ORIGINAL_NAME = ? WHERE ID = ?",
+            [$fileName, $fileName, $id]
         );
     }
 
-    private function getMD5FileName(string $fileName = null): string
+    private function getMD5FileName(string $fileName): string
     {
-        if (empty($fileName)) {
-            return '';
-        }
-
         return hash('md5', $fileName);
     }
 }
