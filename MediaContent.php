@@ -13,38 +13,29 @@ class MediaContent
     private const BEGIN_COUNT = 0;
     private const ONE_UP = 1;
 
-    private $mediaFiles = [];
 
-    public function __construct(int $iBlockId)
+    public function rename(int $iBlockId): void
     {
         if (!\Bitrix\Main\Loader::includeModule('av.rest')) {
-            printf("Unable to include module 'av.rest'.\n");
-            return;
+            throw new AvRestRuntimeException('Не удалось подключить модуль av.rest');
         }
+
+        $countRenamed = self::BEGIN_COUNT;
+
         $arFilter = ['IBLOCK_ID' => $iBlockId, 'GLOBAL_ACTIVE' => 'Y'];
 
         $result = \CIBlockElement::GetList(['SORT' => 'ASC'], $arFilter);
 
-        while($element = $result->GetNext()) {
-            $this->mediaFiles[] = $element;
-        }
-    }
-
-    public function rename(): void
-    {
-        $countRenamed = self::BEGIN_COUNT;
-
-        if (empty($this->mediaFiles)) {
-            printf("Failed! Media is empty.\n");
-            return;
+        if (!$result) {
+            throw new GetMediaFileException('Ошибка получения списка элементов GetList');
         }
 
-        foreach ($this->mediaFiles as $file) {
+        while ($file = $result->GetNext()) {
             $previewId = isset($file['PREVIEW_PICTURE']) ? (int) $file['PREVIEW_PICTURE'] : 0;
             $detailId = isset($file['DETAIL_PICTURE']) ? (int) $file['DETAIL_PICTURE'] : 0;
 
             if ($previewId === 0 && $detailId === 0) {
-                printf("Element with ID %s skipped - images not fount.\n", $file['ID']);
+                printf("Element with ID %s skipped - images not found.\n", $file['ID']);
                 continue;
             }
 
@@ -64,7 +55,7 @@ class MediaContent
                             $file['ID'],
                             $file['NAME']
                 );
-            } catch (Exception $exception) {
+            } catch (\Exception $exception) {
                 printf(
                     "Unable to rename file(s) with ID %s: %s\n",
                             $file['ID'],
